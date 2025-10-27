@@ -1,52 +1,41 @@
-import type { CanvasLayer,CanvasNode } from "./visualisation-store"
-
-interface CanvasTransform {
-  scaleX: number
-  scaleY: number
-  x: number
-  y: number
-}
+import type { CanvasNode } from "./visualisation-store"
 
 export function renderLayer(
   ctx: CanvasRenderingContext2D,
-  canvasLayer: CanvasLayer,
+  nodes: CanvasNode[],
   canvasWidth: number,
   canvasHeight: number,
-  transform: CanvasTransform,
 ) {
-  canvasLayer.nodes.forEach((node) => {
-    renderNode(ctx, node, transform, canvasWidth, canvasHeight)
+  nodes.forEach((node) => {
+    renderNode(ctx, node, canvasWidth, canvasHeight)
   })
 }
 
 function renderNode(
   ctx: CanvasRenderingContext2D,
   node: CanvasNode,
-  transform: CanvasTransform,
   canvasWidth: number,
   canvasHeight: number,
 ) {
+  const minCanvasDim = Math.min(canvasWidth, canvasHeight)
+  const pixelX = node.x * canvasWidth
+  const pixelY = node.y * canvasHeight
+  const pixelRadius = node.radius * minCanvasDim
+
   ctx.fillStyle = node.color
   ctx.strokeStyle = "#ffffff"
   ctx.lineWidth = 2
   ctx.globalAlpha = 0.9
 
   ctx.beginPath()
-  ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2)
+  ctx.arc(pixelX, pixelY, pixelRadius, 0, Math.PI * 2)
   ctx.fill()
   ctx.stroke()
-
   ctx.globalAlpha = 1
 
   ctx.fillStyle = "#ffffff"
-  ctx.font = "12px sans-serif"
+  ctx.font = `${Math.max(12, pixelRadius / 4)}px sans-serif`
   ctx.textAlign = "center"
   ctx.textBaseline = "middle"
-
-  ctx.fillText(node.name, node.x, node.y)
-}
-
-export function isNodeClickable(node: CanvasNode, clickX: number, clickY: number): boolean {
-  const distance = Math.sqrt((clickX - node.x) ** 2 + (clickY - node.y) ** 2)
-  return distance <= node.radius
+  ctx.fillText(node.name, pixelX, pixelY)
 }

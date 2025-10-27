@@ -1,10 +1,10 @@
 import { create } from "zustand"
-import { animate,cancelAnimation } from "./animation"
+import { animate, cancelAnimation } from "./animation"
 
 export interface CanvasNode {
   id: string
   name: string
-  x: number
+  x: number//x,y,and r are relative
   y: number
   radius: number
   color: string
@@ -20,11 +20,6 @@ export interface CanvasLayer {
 }
 
 export interface VisualizationConfig {
-  canvasStyle: {
-    width: number
-    height: number
-    backgroundColor: string
-  }
   layers: Record<string, CanvasLayer>
   rootLayerId: string
 }
@@ -41,7 +36,9 @@ interface VisualizationState {
   layers: Record<string, CanvasLayer>
   currentLayerId: string
   navigationHistory: string[]
-  canvasStyle: VisualizationConfig["canvasStyle"]
+  canvasStyle: {
+    backgroundColor: string
+  }
 
   canvasTransform: CanvasTransform
   layerTransforms: Record<string, CanvasTransform>
@@ -49,277 +46,252 @@ interface VisualizationState {
 
   // Actions
   initializeData: (config: VisualizationConfig) => void
-  zoomIn: (nodeId: string) => void
-  zoomOut: () => void
+  zoomIn: (node: CanvasNode, canvasWidth: number, canvasHeight: number) => void
+  zoomOut: (canvasWidth: number, canvasHeight: number) => void
   goHome: () => void
   navigateToLayer: (historyIndex: number) => void
 
   pan: (dx: number, dy: number) => void
   setZoom: (scale: number, centerX?: number, centerY?: number) => void
   animateZoom: (targetScale: number, centerX?: number, centerY?: number, duration?: number) => void
-  animatePan: (targetX: number, targetY: number, duration?: number) => void
+  animateTransform: (target: Partial<CanvasTransform>, duration: number, onComplete?: () => void) => void
   resetTransform: () => void
   saveLayerTransform: () => void
-  restoreLayerTransform: () => void
 
   getCurrentLayer: () => CanvasLayer | null
   getLayerBreadcrumb: () => Array<{ id: string; name: string }>
 }
 
 export const useVisualizationStore = create<VisualizationState>((set, get) => ({
-  config: null,
-  layers: {},
-  currentLayerId: "",
-  navigationHistory: [],
-  canvasStyle: {
-    width: 0,
-    height: 0,
-    backgroundColor: "#ffffff",
-  },
-  canvasTransform: {
-    scaleX: 1,
-    scaleY: 1,
-    x: 0,
-    y: 0,
-  },
-  layerTransforms: {},
-  isAnimating: false,
-
-  initializeData: (config) => {
-    set({
-      config,
-      layers: config.layers,
-      currentLayerId: config.rootLayerId,
-      navigationHistory: [config.rootLayerId],
-      canvasStyle: config.canvasStyle,
-      canvasTransform: {
+    config: null,
+    layers: {},
+    currentLayerId: "",
+    navigationHistory: [],
+    canvasStyle: {
+        backgroundColor: "#ffffff",
+    },
+    canvasTransform: {
         scaleX: 1,
         scaleY: 1,
         x: 0,
         y: 0,
-      },
-      layerTransforms: {},
-    })
-  },
+    },
+    layerTransforms: {},
+    isAnimating: false,
 
-  zoomIn: (nodeId) => {
-    const { layers, currentLayerId } = get()
-    const currentLayer = layers[currentLayerId]
+    initializeData: (config) => {
+        set({
+            config,
+            layers: config.layers,
+            currentLayerId: config.rootLayerId,
+            navigationHistory: [config.rootLayerId],
+            canvasStyle: {
+                backgroundColor: config.layers[config.rootLayerId]?.backgroundColor || "#ffffff",
+            },
+            canvasTransform: { scaleX: 1, scaleY: 1, x: 0, y: 0 },
+            layerTransforms: {},
+        })
+    },
 
-    if (!currentLayer) return
+    zoomIn: (node, canvasWidth, canvasHeight) => {
+        const { isAnimating } = get()
+        if (!node.childLayerId || isAnimating) return
 
-    const node = currentLayer.nodes.find((n) => n.id === nodeId)
-    if (!node || !node.childLayerId) return
+        const { layers, navigationHistory } = get()
+        const nextLayerId = node.childLayerId
 
-    const nextLayerId = node.childLayerId
-    const { navigationHistory } = get()
+        get().saveLayerTransform()
 
-    get().saveLayerTransform()
+        const minCanvasDim = Math.min(canvasWidth, canvasHeight)
+        const targetScale = canvasWidth / (node.radius * minCanvasDim * 2.2)
+        const targetX = canvasWidth / 2 - node.x * canvasWidth * targetScale
+        const targetY = canvasHeight / 2 - node.y * canvasHeight * targetScale
 
-    set({
-      currentLayerId: nextLayerId,
-      navigationHistory: [...navigationHistory, nextLayerId],
-      canvasTransform: {
-        scaleX: 1,
-        scaleY: 1,
-        x: 0,
-        y: 0,
-      },
-    })
-  },
+        set({ isAnimating: true })
+        get().animateTransform({ scaleX: targetScale, scaleY: targetScale, x: targetX, y: targetY }, 500, () => {
+            set({
+                currentLayerId: nextLayerId,
+                navigationHistory: [...navigationHistory, nextLayerId],
+                canvasStyle: {
+                    backgroundColor: layers[nextLayerId]?.backgroundColor || "#ffffff",
+                },
+            })
+            get().resetTransform() // Resets transform for the new layer
+        })
+    },
 
-  zoomOut: () => {
-    const { navigationHistory } = get()
+    zoomOut: (canvasWidth, canvasHeight) => {
+        const { navigationHistory, layers, isAnimating, layerTransforms } = get()
 
-    if (navigationHistory.length <= 1) return
+        if (navigationHistory.length <= 1 || isAnimating) return
 
-    const newHistory = navigationHistory.slice(0, -1)
-    const previousLayerId = newHistory[newHistory.length - 1]
+        const currentLayer = layers[get().currentLayerId]
+        const parentLayerId = navigationHistory[navigationHistory.length - 2]
+        const parentLayer = layers[parentLayerId]
+        const parentNode = parentLayer.nodes.find((n) => n.id === currentLayer.parentNodeId)
 
-    get().restoreLayerTransform()
+        if (!parentNode) return
 
-    set({
-      currentLayerId: previousLayerId,
-      navigationHistory: newHistory,
-    })
-  },
-
-  goHome: () => {
-    const { config } = get()
-    if (!config) return
-
-    get().animateZoom(1, 0, 0, 600)
-
-    set({
-      currentLayerId: config.rootLayerId,
-      navigationHistory: [config.rootLayerId],
-      layerTransforms: {},
-    })
-  },
-
-  navigateToLayer: (historyIndex) => {
-    const { navigationHistory } = get()
-
-    if (historyIndex < 0 || historyIndex >= navigationHistory.length) return
-
-    const newHistory = navigationHistory.slice(0, historyIndex + 1)
-    const targetLayerId = newHistory[newHistory.length - 1]
-
-    get().animateZoom(1, 0, 0, 400)
-
-    set({
-      currentLayerId: targetLayerId,
-      navigationHistory: newHistory,
-    })
-  },
-
-  pan: (dx, dy) => {
-    const { canvasTransform } = get()
-    set({
-      canvasTransform: {
-        ...canvasTransform,
-        x: canvasTransform.x + dx,
-        y: canvasTransform.y + dy,
-      },
-    })
-  },
-
-  setZoom: (scale, centerX = 0, centerY = 0) => {
-    const { canvasTransform } = get()
-    const newScale = Math.max(0.1, Math.min(scale, 5))
-
-    const dx = centerX - (centerX - canvasTransform.x) * (newScale / canvasTransform.scaleX)
-    const dy = centerY - (centerY - canvasTransform.y) * (newScale / canvasTransform.scaleY)
-
-    set({
-      canvasTransform: {
-        scaleX: newScale,
-        scaleY: newScale,
-        x: dx,
-        y: dy,
-      },
-    })
-  },
-
-  animateZoom: (targetScale, centerX = 0, centerY = 0, duration = 400) => {
-    const { canvasTransform } = get()
-    const startScale = canvasTransform.scaleX
-    const clampedScale = Math.max(0.1, Math.min(targetScale, 5))
-
-    set({ isAnimating: true })
-
-    animate(
-      "zoom",
-      startScale,
-      clampedScale,
-      duration,
-      (scale) => {
-        const { canvasTransform: current } = get()
-        const dx = centerX - (centerX - current.x) * (scale / current.scaleX)
-        const dy = centerY - (centerY - current.y) * (scale / current.scaleY)
+        const minCanvasDim = Math.min(canvasWidth, canvasHeight)
+        const startScale = canvasWidth / (parentNode.radius * minCanvasDim * 2.2)
+        const startX = canvasWidth / 2 - parentNode.x * canvasWidth * startScale
+        const startY = canvasHeight / 2 - parentNode.y * canvasHeight * startScale
 
         set({
-          canvasTransform: {
-            scaleX: scale,
-            scaleY: scale,
-            x: dx,
-            y: dy,
-          },
+            currentLayerId: parentLayerId,
+            navigationHistory: navigationHistory.slice(0, -1),
+            canvasStyle: {
+                backgroundColor: parentLayer.backgroundColor,
+            },
+            canvasTransform: { scaleX: startScale, scaleY: startScale, x: startX, y: startY },
         })
-      },
-      () => {
-        set({ isAnimating: false })
-      },
-    )
-  },
 
-  animatePan: (targetX, targetY, duration = 300) => {
-    const { canvasTransform } = get()
+        const targetTransform = layerTransforms[parentLayerId] || { scaleX: 1, scaleY: 1, x: 0, y: 0 }
+        set({ isAnimating: true })
+        get().animateTransform(targetTransform, 500, () => {
+            set({ isAnimating: false })
+        })
+    },
 
-    set({ isAnimating: true })
+    goHome: () => {
+        const { config, layers } = get()
+        if (!config) return
 
-    const startX = canvasTransform.x
-    const startY = canvasTransform.y
+        const rootLayerId = config.rootLayerId
+        set({ isAnimating: true })
 
-    animate("pan-x", startX, targetX, duration, (x) => {
-      const { canvasTransform: current } = get()
-      set({
-        canvasTransform: {
-          ...current,
-          x,
-        },
-      })
-    })
+        get().animateTransform({ scaleX: 1, scaleY: 1, x: 0, y: 0 }, 600, () => {
+            set({
+                currentLayerId: rootLayerId,
+                navigationHistory: [rootLayerId],
+                layerTransforms: {},
+                canvasStyle: {
+                    backgroundColor: layers[rootLayerId]?.backgroundColor || "#ffffff",
+                },
+                isAnimating: false,
+            })
+        })
+    },
 
-    animate(
-      "pan-y",
-      startY,
-      targetY,
-      duration,
-      (y) => {
-        const { canvasTransform: current } = get()
+    navigateToLayer: (historyIndex) => {
+        const { navigationHistory, layers } = get()
+        if (historyIndex < 0 || historyIndex >= navigationHistory.length) return
+
+        const newHistory = navigationHistory.slice(0, historyIndex + 1)
+        const targetLayerId = newHistory[newHistory.length - 1]
+
+        get().animateTransform({ scaleX: 1, scaleY: 1, x: 0, y: 0 }, 400, () => {
+            set({
+                currentLayerId: targetLayerId,
+                navigationHistory: newHistory,
+                canvasStyle: {
+                    backgroundColor: layers[targetLayerId]?.backgroundColor || "#ffffff",
+                },
+            })
+        })
+    },
+
+    pan: (dx, dy) => {
+        const { canvasTransform } = get()
         set({
-          canvasTransform: {
-            ...current,
-            y,
-          },
+            canvasTransform: {
+                ...canvasTransform,
+                x: canvasTransform.x + dx,
+                y: canvasTransform.y + dy,
+            },
         })
-      },
-      () => {
-        set({ isAnimating: false })
-      },
-    )
-  },
+    },
 
-  resetTransform: () => {
-    cancelAnimation("zoom")
-    cancelAnimation("pan-x")
-    cancelAnimation("pan-y")
+    setZoom: (scale, centerX = 0, centerY = 0) => {
+        const { canvasTransform } = get()
+        const newScale = Math.max(0.1, Math.min(scale, 10))
 
-    set({
-      canvasTransform: {
-        scaleX: 1,
-        scaleY: 1,
-        x: 0,
-        y: 0,
-      },
-      isAnimating: false,
-    })
-  },
+        const dx = centerX - ((centerX - canvasTransform.x) * newScale) / canvasTransform.scaleX
+        const dy = centerY - ((centerY - canvasTransform.y) * newScale) / canvasTransform.scaleY
 
-  saveLayerTransform: () => {
-    const { currentLayerId, canvasTransform, layerTransforms } = get()
-    set({
-      layerTransforms: {
-        ...layerTransforms,
-        [currentLayerId]: canvasTransform,
-      },
-    })
-  },
+        set({
+            canvasTransform: {
+                scaleX: newScale,
+                scaleY: newScale,
+                x: dx,
+                y: dy,
+            },
+        })
+    },
 
-  restoreLayerTransform: () => {
-    const { currentLayerId, layerTransforms } = get()
-    const transform = layerTransforms[currentLayerId]
+    animateZoom: (targetScale, centerX = 0, centerY = 0, duration = 400) => {
+        const { canvasTransform } = get()
+        const startScale = canvasTransform.scaleX
+        const startX = canvasTransform.x
+        const startY = canvasTransform.y
+        const clampedScale = Math.max(0.1, Math.min(targetScale, 10))
 
-    if (transform) {
-      set({
-        canvasTransform: transform,
-      })
-    } else {
-      get().resetTransform()
-    }
-  },
+        set({ isAnimating: true })
 
-  getCurrentLayer: () => {
-    const { layers, currentLayerId } = get()
-    return layers[currentLayerId] || null
-  },
+        animate(
+            "zoom",
+            startScale,
+            clampedScale,
+            duration,
+            (scale) => {
+                const x = centerX - ((centerX - startX) * scale) / startScale
+                const y = centerY - ((centerY - startY) * scale) / startScale
+                set({
+                    canvasTransform: { scaleX: scale, scaleY: scale, x, y },
+                })
+            },
+            () => set({ isAnimating: false }),
+        )
+    },
 
-  getLayerBreadcrumb: () => {
-    const { navigationHistory, layers } = get()
-    return navigationHistory.map((layerId) => ({
-      id: layerId,
-      name: layers[layerId]?.name || "Unknown",
-    }))
-  },
-}))
+    animateTransform: (target, duration, onComplete) => {
+        const { canvasTransform: start } = get()
+        const targetWithDefaults = { ...start, ...target }
+
+        animate(
+            "transform",
+            0,
+            1,
+            duration,
+            (progress) => {
+                const scaleX = start.scaleX + (targetWithDefaults.scaleX - start.scaleX) * progress
+                const scaleY = start.scaleY + (targetWithDefaults.scaleY - start.scaleY) * progress
+                const x = start.x + (targetWithDefaults.x - start.x) * progress
+                const y = start.y + (targetWithDefaults.y - start.y) * progress
+                set({ canvasTransform: { scaleX, scaleY, x, y } })
+            },
+            onComplete,
+        )
+    },
+
+    resetTransform: () => {
+        cancelAnimation("transform")
+        set({
+            canvasTransform: { scaleX: 1, scaleY: 1, x: 0, y: 0 },
+            isAnimating: false,
+        })
+    },
+
+    saveLayerTransform: () => {
+        const { currentLayerId, canvasTransform, layerTransforms } = get()
+        set({
+            layerTransforms: {
+                ...layerTransforms,
+                [currentLayerId]: canvasTransform,
+            },
+        })
+    },
+
+    getCurrentLayer: () => {
+        const { layers, currentLayerId } = get()
+        return layers[currentLayerId] || null
+    },
+
+    getLayerBreadcrumb: () => {
+        const { navigationHistory, layers } = get()
+        return navigationHistory.map((layerId) => ({
+            id: layerId,
+            name: layers[layerId]?.name || "Unknown",
+        }))
+    },
+}));

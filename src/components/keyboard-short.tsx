@@ -1,10 +1,18 @@
 "use client"
 
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { useVisualizationStore } from "@/utils/visualisation-store"
 
 export function KeyboardShortcuts() {
   const { goHome, zoomOut, navigationHistory } = useVisualizationStore()
+  const [canvasEl, setCanvasEl] = useState<HTMLCanvasElement | null>(null)
+
+  useEffect(() => {
+    const el = document.getElementById("visualization-canvas")
+    if (el instanceof HTMLCanvasElement) {
+      setCanvasEl(el)
+    }
+  }, [])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -12,21 +20,19 @@ export function KeyboardShortcuts() {
         return
       }
 
+      if (!canvasEl) return
+
       switch (e.key.toLowerCase()) {
         case "h":
           e.preventDefault()
           goHome()
           break
         case "escape":
-          e.preventDefault()
-          if (navigationHistory.length > 1) {
-            zoomOut()
-          }
-          break
         case "arrowup":
           e.preventDefault()
           if (navigationHistory.length > 1) {
-            zoomOut()
+            //pass the required canvas dimensions to zoomOut
+            zoomOut(canvasEl.offsetWidth, canvasEl.offsetHeight)
           }
           break
       }
@@ -34,7 +40,7 @@ export function KeyboardShortcuts() {
 
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [goHome, zoomOut, navigationHistory.length])
+  }, [goHome, zoomOut, navigationHistory.length, canvasEl])
 
   return null
 }
