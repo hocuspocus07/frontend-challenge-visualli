@@ -33,7 +33,7 @@ This application provides an intuitive way to explore complex hierarchical data 
 - **Animation Layer**: Custom requestAnimationFrame-based animation system with easing functions
 
 **Data Structure**:
-\`\`\`
+```
 VisualizationConfig
 ├── canvasStyle (dimensions, background)
 ├── rootLayerId (entry point)
@@ -45,7 +45,7 @@ VisualizationConfig
     └── Layer 2
         ├── nodes
         └── backgroundColor
-\`\`\`
+```
 
 ### UI/UX Approach
 
@@ -59,7 +59,7 @@ VisualizationConfig
 
 ### Component Structure
 
-\`\`\`
+```
 app/page.tsx (Main layout & state initialization)
 ├── VisualizationCanvas (Canvas rendering & interactions)
 │   ├── Canvas element with transform matrix
@@ -72,7 +72,7 @@ app/page.tsx (Main layout & state initialization)
 │   ├── Current layer indicator
 │   └── Quick-jump buttons
 └── KeyboardShortcuts (Keyboard event handling)
-\`\`\`
+```
 
 ### How It Works
 
@@ -121,7 +121,7 @@ Custom `requestAnimationFrame`-based animation engine with:
 
 ### Running Tests
 
-\`\`\`bash
+```bash
 # Install dependencies
 npm install
 # or
@@ -135,29 +135,29 @@ npm run build
 
 # Start production server
 npm start
-\`\`\`
+```
 
 ##  Working Code (Runnable Locally)
 
 ### Quick Start
 
 1. **Clone and Install**
-\`\`\`bash
+```bash
 git clone https://github.com/hocuspocus07/frontend-challenge-visualli.git
 cd frontend-challenge-visualli
 npm install
-\`\`\`
+```
 
 2. **Run Development Server**
-\`\`\`bash
+```bash
 npm run dev
-\`\`\`
+```
 Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 3. **Customize Data**
 Edit `/utils/sample.ts` to add your own hierarchical data:
 
-\`\`\`typescript
+```typescript
 export const sampleData: VisualizationConfig = {
   canvasStyle: {
     width: 1200,
@@ -210,11 +210,11 @@ export const sampleData: VisualizationConfig = {
     },
   },
 }
-\`\`\`
+```
 
 ### Project Structure
 
-\`\`\`
+```
 src/
 ├── app/
 │   ├── page.tsx              # Main page with layout
@@ -232,7 +232,7 @@ src/
 │   └── sample.ts        # Example hierarchical data
 └── public/
     └── (static assets)
-\`\`\`
+```
 
 ### Key Features Explained
 
@@ -330,7 +330,7 @@ Edit `x` and `y` coordinates in node definitions. Canvas uses standard coordinat
 
 ##  Data Configuration Reference
 
-\`\`\`typescript
+```typescript
 interface CanvasNode {
   id: string              // Unique identifier
   name: string            // Display name
@@ -358,7 +358,7 @@ interface VisualizationConfig {
   layers: Record<string, CanvasLayer>  // All layers
   rootLayerId: string                  // Starting layer ID
 }
-\`\`\`
+```
 
 ##  Low level info
 
