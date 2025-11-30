@@ -5,19 +5,11 @@ import { useVisualizationStore } from "@/utils/visualisation-store"
 import { renderLayer } from "@/utils/canvas-renderer"
 
 export function VisualizationCanvas() {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const containerRef = useRef<HTMLDivElement>(null)
-  
-  //refs for mouse and general state
-  const isDraggingRef = useRef(false)
-  const lastPosRef = useRef({ x: 0, y: 0 })
-  const spaceKeyRef = useRef(false)
-
-  //refs specifically for touch events
-  const initialPinchDistanceRef = useRef(0)
-  const lastTouchPosRef = useRef({ x: 0, y: 0 })
-  const touchActionRef = useRef<"pan" | "zoom" | null>(null)
-
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const isDragging = useRef(false)
+  const lastPos = useRef({ x: 0, y: 0 })
+  const pinchStart = useRef(0)
 
   const {
     currentLayerId,
@@ -30,267 +22,193 @@ export function VisualizationCanvas() {
     zoomOut,
     setZoom,
     canvasStyle,
+    navigationHistory,
   } = useVisualizationStore()
 
-  //initialize canvas and handle resize
+  // constants for auto zoom behaviour
+  const AUTO_IN_FRAC = 0.45
+  const AUTO_OUT_SCALE = 0.6
+  const COOLDOWN = 900
+  const lastAutoOut = useRef(0)
+  const prevNavLen = useRef(navigationHistory?.length || 0)
+
+  // Resize canvas to DPR-correct dimensions
   useEffect(() => {
     const canvas = canvasRef.current
     const container = containerRef.current
     if (!canvas || !container) return
-
-    const resizeObserver = new ResizeObserver(() => {
-      const rect = container.getBoundingClientRect()
-      canvas.width = rect.width * window.devicePixelRatio
-      canvas.height = rect.height * window.devicePixelRatio
-      canvas.style.width = `${rect.width}px`
-      canvas.style.height = `${rect.height}px`
+    const ro = new ResizeObserver(() => {
+      const r = container.getBoundingClientRect()
+      canvas.width = r.width * devicePixelRatio
+      canvas.height = r.height * devicePixelRatio
+      canvas.style.width = `${r.width}px`
+      canvas.style.height = `${r.height}px`
     })
-
-    resizeObserver.observe(container)
-    return () => resizeObserver.disconnect()
+    ro.observe(container)
+    return () => ro.disconnect()
   }, [])
 
-  //render canvas
+  // Render active layer
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    const currentLayer = layers[currentLayerId]
-    if (!currentLayer) return
+    const layer = layers[currentLayerId]
+    if (!layer) return
+
+    const w = canvas.offsetWidth
+    const h = canvas.offsetHeight
 
     ctx.save()
-    ctx.scale(window.devicePixelRatio, window.devicePixelRatio)
-
-    ctx.fillStyle = currentLayer.backgroundColor || "#ffffff"
-    ctx.fillRect(0, 0, canvas.offsetWidth, canvas.offsetHeight)
-
+    ctx.scale(devicePixelRatio, devicePixelRatio)
+    ctx.fillStyle = layer.backgroundColor || "#ffffff"
+    ctx.fillRect(0, 0, w, h)
     ctx.translate(canvasTransform.x, canvasTransform.y)
     ctx.scale(canvasTransform.scaleX, canvasTransform.scaleY)
-
-    renderLayer(ctx, currentLayer.nodes, canvas.offsetWidth, canvas.offsetHeight)
-
+    renderLayer(ctx, layer.nodes, w, h)
     ctx.restore()
   }, [currentLayerId, layers, canvasTransform])
 
-  //automatic zoom-in logic (works for both mouse and touch)
+  // Auto-zoom-in (centered, picks best candidate)
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || isAnimating) return
-
-    const currentLayer = layers[currentLayerId]
-    if (!currentLayer) return
-
-    const minCanvasDim = Math.min(canvas.offsetWidth, canvas.offsetHeight)
-    
-    const viewportCenterX = (canvas.offsetWidth / 2 - canvasTransform.x) / canvasTransform.scaleX
-    const viewportCenterY = (canvas.offsetHeight / 2 - canvasTransform.y) / canvasTransform.scaleY
-
-    let bestCandidate = null
-    let minDistance = Infinity
-
-    for (const node of currentLayer.nodes) {
-      if (node.childLayerId) {
-        const apparentDiameter = node.radius * minCanvasDim * 2 * canvasTransform.scaleX
-
-        if (apparentDiameter > canvas.offsetWidth * 0.9) {
-          const nodeX = node.x * canvas.offsetWidth
-          const nodeY = node.y * canvas.offsetHeight
-          const distance = Math.hypot(viewportCenterX - nodeX, viewportCenterY - nodeY)
-
-          if (distance < minDistance) {
-            minDistance = distance
-            bestCandidate = node
-          }
-        }
-      }
+    const layer = layers[currentLayerId]
+    if (!layer) return
+    const w = canvas.offsetWidth
+    const h = canvas.offsetHeight
+    const minDim = Math.min(w, h)
+    const cx = (w / 2 - canvasTransform.x) / canvasTransform.scaleX
+    const cy = (h / 2 - canvasTransform.y) / canvasTransform.scaleY
+    let best: any = null
+    let bestDist = Infinity
+    for (const n of layer.nodes) {
+      if (!n.childLayerId) continue
+      const diameter = n.radius * minDim * 2 * canvasTransform.scaleX
+      if (diameter < w * AUTO_IN_FRAC) continue
+      const nx = n.x * w
+      const ny = n.y * h
+      const d = Math.hypot(cx - nx, cy - ny)
+      if (d < bestDist) { bestDist = d; best = n }
     }
-
-    if (bestCandidate) {
-      zoomIn(bestCandidate, canvas.offsetWidth, canvas.offsetHeight)
-    }
+    if (best && Date.now() - lastAutoOut.current > COOLDOWN) zoomIn(best, w, h)
   }, [canvasTransform, currentLayerId, layers, isAnimating, zoomIn])
 
+  // Auto zoom-out on scale threshold (only when inside child)
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || isAnimating) return
+    if (!navigationHistory || navigationHistory.length <= 1) return
+    if (canvasTransform.scaleX < AUTO_OUT_SCALE && Date.now() - lastAutoOut.current > COOLDOWN) {
+      zoomOut(canvas.offsetWidth, canvas.offsetHeight)
+      lastAutoOut.current = Date.now()
+    }
+  }, [canvasTransform.scaleX, navigationHistory, isAnimating, zoomOut])
 
-  //handle mouse wheel zoom
+  // Recognize programmatic zoom-outs and set cooldown
+  useEffect(() => {
+    const current = navigationHistory?.length || 0
+    if (current < prevNavLen.current) lastAutoOut.current = Date.now()
+    prevNavLen.current = current
+  }, [navigationHistory])
+
+  // Wheel zoom (animate)
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-
-    const handleWheel = (e: WheelEvent) => {
+    const onWheel = (e: WheelEvent) => {
       e.preventDefault()
       if (isAnimating) return
-
       const rect = canvas.getBoundingClientRect()
-      const pointerX = e.clientX - rect.left
-      const pointerY = e.clientY - rect.top
       const scaleBy = 1.3
-
-      animateZoom(e.deltaY < 0 ? canvasTransform.scaleX * scaleBy : canvasTransform.scaleX / scaleBy, pointerX, pointerY, 200)
+      const target = e.deltaY < 0 ? canvasTransform.scaleX * scaleBy : canvasTransform.scaleX / scaleBy
+      animateZoom(target, e.clientX - rect.left, e.clientY - rect.top, 200)
     }
+    canvas.addEventListener("wheel", onWheel, { passive: false })
+    return () => canvas.removeEventListener("wheel", onWheel)
+  }, [canvasTransform, animateZoom, isAnimating])
 
-    canvas.addEventListener("wheel", handleWheel, { passive: false })
-    return () => canvas.removeEventListener("wheel", handleWheel)
-  }, [canvasTransform.scaleX, animateZoom, isAnimating])
-
-  //handle canvas panning (Mouse)
+  // Middle-mouse pan
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-
-    const handleMouseDown = (e: MouseEvent) => {
-      if ((e.button === 1 || (spaceKeyRef.current && e.button === 0)) && !isAnimating) {
-        isDraggingRef.current = true
-        lastPosRef.current = { x: e.clientX, y: e.clientY }
-        canvas.style.cursor = "grabbing"
-      }
-    }
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isDraggingRef.current) return
-      pan(e.clientX - lastPosRef.current.x, e.clientY - lastPosRef.current.y)
-      lastPosRef.current = { x: e.clientX, y: e.clientY }
-    }
-    const handleMouseUp = () => {
-      isDraggingRef.current = false
-      canvas.style.cursor = spaceKeyRef.current ? "grab" : "default"
-    }
-    const handleKeyDown = (e: KeyboardEvent) => { if (e.code === "Space" && !isDraggingRef.current) { spaceKeyRef.current = true; canvas.style.cursor = "grab" } }
-    const handleKeyUp = (e: KeyboardEvent) => { if (e.code === "Space") { spaceKeyRef.current = false; if (!isDraggingRef.current) canvas.style.cursor = "default" } }
-
-    canvas.addEventListener("mousedown", handleMouseDown)
-    window.addEventListener("mousemove", handleMouseMove)
-    window.addEventListener("mouseup", handleMouseUp)
-    window.addEventListener("keydown", handleKeyDown)
-    window.addEventListener("keyup", handleKeyUp)
-
-    return () => {
-      canvas.removeEventListener("mousedown", handleMouseDown)
-      window.removeEventListener("mousemove", handleMouseMove)
-      window.removeEventListener("mouseup", handleMouseUp)
-      window.removeEventListener("keydown", handleKeyDown)
-      window.removeEventListener("keyup", handleKeyUp)
-    }
+    const onMouseDown = (e: MouseEvent) => { if (e.button !== 1 || isAnimating) return; isDragging.current = true; lastPos.current = { x: e.clientX, y: e.clientY }; canvas.style.cursor = "grabbing" }
+    const onMouseMove = (e: MouseEvent) => { if (!isDragging.current) return; pan(e.clientX - lastPos.current.x, e.clientY - lastPos.current.y); lastPos.current = { x: e.clientX, y: e.clientY } }
+    const onMouseUp = () => { isDragging.current = false; canvas.style.cursor = "default" }
+    canvas.addEventListener("mousedown", onMouseDown)
+    window.addEventListener("mousemove", onMouseMove)
+    window.addEventListener("mouseup", onMouseUp)
+    return () => { canvas.removeEventListener("mousedown", onMouseDown); window.removeEventListener("mousemove", onMouseMove); window.removeEventListener("mouseup", onMouseUp) }
   }, [pan, isAnimating])
 
-  //handle Touch Events (Mobile)
+  // Touch pan & pinch
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-
-    const handleTouchStart = (e: TouchEvent) => {
-        e.preventDefault()
-        if (isAnimating) return;
-
-        if (e.touches.length === 2) { //pinch
-            touchActionRef.current = "zoom";
-            const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-            initialPinchDistanceRef.current = dist;
-        } else if (e.touches.length === 1) { //panning
-            touchActionRef.current = "pan";
-            lastTouchPosRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-        }
+    const onStart = (e: TouchEvent) => {
+      e.preventDefault(); if (isAnimating) return
+      if (e.touches.length === 2) { pinchStart.current = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY) }
+      else { lastPos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY } }
     }
-
-    const handleTouchMove = (e: TouchEvent) => {
-        e.preventDefault()
-        if (isAnimating) return;
-
-        if (e.touches.length === 2 && touchActionRef.current === "zoom") { //pinch
-            const newDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-            const scaleMultiplier = newDist / initialPinchDistanceRef.current;
-            const newScale = canvasTransform.scaleX * scaleMultiplier;
-
-            const rect = canvas.getBoundingClientRect();
-            const centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
-            const centerY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
-
-            setZoom(newScale, centerX, centerY);
-            initialPinchDistanceRef.current = newDist;
-
-        } else if (e.touches.length === 1 && touchActionRef.current === "pan") { //panning
-            const touch = e.touches[0];
-            const dx = touch.clientX - lastTouchPosRef.current.x;
-            const dy = touch.clientY - lastTouchPosRef.current.y;
-            pan(dx, dy);
-            lastTouchPosRef.current = { x: touch.clientX, y: touch.clientY };
-        }
+    const onMove = (e: TouchEvent) => {
+      e.preventDefault(); if (isAnimating) return
+      if (e.touches.length === 2) {
+        const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY)
+        const rect = canvas.getBoundingClientRect()
+        const centerX = ((e.touches[0].clientX + e.touches[1].clientX) / 2) - rect.left
+        const centerY = ((e.touches[0].clientY + e.touches[1].clientY) / 2) - rect.top
+        const targetScale = canvasTransform.scaleX * (dist / pinchStart.current)
+        setZoom(Math.max(0.1, Math.min(targetScale, 10)), centerX, centerY)
+        pinchStart.current = dist
+      } else if (e.touches.length === 1) {
+        const t = e.touches[0]
+        pan(t.clientX - lastPos.current.x, t.clientY - lastPos.current.y)
+        lastPos.current = { x: t.clientX, y: t.clientY }
+      }
     }
+    const onEnd = () => { pinchStart.current = 0 }
+    canvas.addEventListener("touchstart", onStart, { passive: false }); canvas.addEventListener("touchmove", onMove, { passive: false }); canvas.addEventListener("touchend", onEnd); canvas.addEventListener("touchcancel", onEnd)
+    return () => { canvas.removeEventListener("touchstart", onStart); canvas.removeEventListener("touchmove", onMove); canvas.removeEventListener("touchend", onEnd); canvas.removeEventListener("touchcancel", onEnd) }
+  }, [pan, setZoom, canvasTransform, isAnimating])
 
-    const handleTouchEnd = () => {
-        touchActionRef.current = null;
-        initialPinchDistanceRef.current = 0;
-    }
-
-    canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
-    canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
-    canvas.addEventListener('touchend', handleTouchEnd);
-    canvas.addEventListener('touchcancel', handleTouchEnd);
-
-    return () => {
-        canvas.removeEventListener('touchstart', handleTouchStart);
-        canvas.removeEventListener('touchmove', handleTouchMove);
-        canvas.removeEventListener('touchend', handleTouchEnd);
-        canvas.removeEventListener('touchcancel', handleTouchEnd);
-    }
-}, [pan, isAnimating, setZoom, canvasTransform.scaleX]);
-
-  //handle right-click zoom out
+  // Right-click to zoom out
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const handleContextMenu = (e: MouseEvent) => {
-      e.preventDefault()
-      zoomOut(canvas.offsetWidth, canvas.offsetHeight)
-    }
-    canvas.addEventListener("contextmenu", handleContextMenu)
-    return () => canvas.removeEventListener("contextmenu", handleContextMenu)
+    const onContext = (e: MouseEvent) => { e.preventDefault(); zoomOut(canvas.offsetWidth, canvas.offsetHeight) }
+    canvas.addEventListener("contextmenu", onContext)
+    return () => canvas.removeEventListener("contextmenu", onContext)
   }, [zoomOut])
 
-  //handle node clicks
+  // Click to zoom in on node
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-
-    const handleCanvasClick = (e: MouseEvent) => {
+    const onClick = (e: MouseEvent) => {
       if (isAnimating || e.button !== 0) return
-
       const rect = canvas.getBoundingClientRect()
       const clickX = e.clientX - rect.left
       const clickY = e.clientY - rect.top
-
       const canvasX = (clickX - canvasTransform.x) / canvasTransform.scaleX
       const canvasY = (clickY - canvasTransform.y) / canvasTransform.scaleY
-
-      const currentLayer = layers[currentLayerId]
-      if (!currentLayer) return
-
-      const minCanvasDim = Math.min(canvas.offsetWidth, canvas.offsetHeight)
-
-      for (const node of [...currentLayer.nodes].reverse()) {
-        const nodeX = node.x * canvas.offsetWidth
-        const nodeY = node.y * canvas.offsetHeight
-        const nodeRadius = node.radius * minCanvasDim
-
-        const distance = Math.hypot(canvasX - nodeX, canvasY - nodeY)
-
-        if (distance <= nodeRadius && node.childLayerId) {
-          zoomIn(node, canvas.offsetWidth, canvas.offsetHeight)
-          break
-        }
+      const layer = layers[currentLayerId]
+      if (!layer) return
+      const minDim = Math.min(canvas.offsetWidth, canvas.offsetHeight)
+      for (const node of [...layer.nodes].reverse()) {
+        const nx = node.x * canvas.offsetWidth
+        const ny = node.y * canvas.offsetHeight
+        const nr = node.radius * minDim
+        if (Math.hypot(canvasX - nx, canvasY - ny) <= nr && node.childLayerId) { zoomIn(node, canvas.offsetWidth, canvas.offsetHeight); break }
       }
     }
-
-    canvas.addEventListener("click", handleCanvasClick)
-    return () => canvas.removeEventListener("click", handleCanvasClick)
-  }, [currentLayerId, layers, canvasTransform, zoomIn, isAnimating])
+    canvas.addEventListener("click", onClick)
+    return () => canvas.removeEventListener("click", onClick)
+  }, [layers, currentLayerId, canvasTransform, zoomIn, isAnimating])
 
   return (
-    <div
-      ref={containerRef}
-      className="flex-1 relative overflow-hidden transition-colors duration-500 ease-in-out"
-      style={{ backgroundColor: canvasStyle.backgroundColor }}
-    >
+    <div ref={containerRef} className="flex-1 relative overflow-hidden transition-colors duration-500 ease-in-out" style={{ backgroundColor: canvasStyle.backgroundColor }}>
       <canvas ref={canvasRef} id="visualization-canvas" className="absolute top-0 left-0 w-full h-full" />
     </div>
   )

@@ -44,10 +44,31 @@ export const sampleData: VisualizationConfig = {
       backgroundColor: "#e94560",
       parentNodeId: "evaporation",
       nodes: [
-        { id: "solar-heat", name: "Solar Heat", x: 0.25, y: 0.5, radius: 0.1, color: "#ffa500" },
+        { id: "solar-heat", name: "Solar Heat", x: 0.25, y: 0.5, radius: 0.1, color: "#ffa500", childLayerId: "solar-heat-details" },
         { id: "water-surface", name: "Water Surface", x: 0.5, y: 0.5, radius: 0.1, color: "#00bfff" },
         { id: "vapor-formation", name: "Vapor Formation", x: 0.75, y: 0.5, radius: 0.1, color: "#87ceeb" },
       ],
+    },
+    "solar-heat-details": {
+      id: "solar-heat-details",
+      name: "Solar Heat Details",
+      backgroundColor: "#ffa500",
+      parentNodeId: "solar-heat",
+      nodes: [
+        { id: "infrared-radiation", name: "Infrared Radiation", x: 0.25, y: 0.5, radius: 0.08, color: "#ff8c00" ,childLayerId:"infrared-radiation-details"},
+        { id: "molecular-excitation", name: "Molecular Excitation", x: 0.5, y: 0.5, radius: 0.08, color: "#ffd700" },
+        { id: "evaporation-micros", name: "Micro Evaporation", x: 0.75, y: 0.5, radius: 0.08, color: "#ffb347" },
+      ],
+    },
+    "infrared-radiation-details": {
+      id:" infrared-radiation-details",
+      name: "Infrared Radiation Details",
+      backgroundColor: "#ff8c00",
+      parentNodeId: "infrared-radiation",
+      nodes:[
+        { id: "wavelengths", name: "Wavelengths", x: 0.33, y: 0.5, radius: 0.06, color: "#ffa07a" },
+        { id: "atmospheric-absorption", name: "Atmospheric Absorption", x: 0.66, y: 0.5, radius: 0.06, color: "#ff4500" },
+      ]
     },
     "condensation-details": {
       id: "condensation-details",
